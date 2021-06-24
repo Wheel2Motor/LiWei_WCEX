@@ -26,15 +26,38 @@ class DataLayer:
     VERTEX_COLOR = "VC"
 
 
+def assert_active_object(context):
+    active_object = context.active_object
+    return active_object if (active_object and active_object.type == 'MESH') else None
+
+
+def assert_object_with_active_W(context):
+    active_object = assert_active_object(context)
+    return active_object if (active_object and active_object.vertex_groups.active) else None
+
+
+def assert_object_with_active_C(context):
+    active_object = assert_active_object(context)
+    return active_object if (active_object and active_object.data.vertex_colors.active) else None
+
+
+def assert_object_with_active_W_and_C(context):
+    active_object = assert_active_object(context)
+    return active_object if (assert_object_with_active_W(context) and assert_object_with_active_C(context)) else None
+
+
+def assert_object_with_active_W_or_C(context):
+    active_object = assert_active_object(context)
+    return active_object if (assert_object_with_active_W(context) or assert_object_with_active_C(context)) else None
+
+
 def get_vertex_data_layer(ob, layer_type, layer_name):
     outList = {}
-
     if (layer_type == DataLayer.VERTEX_COLOR):
         for l in (ob.data.loops):
             i = l.vertex_index
             j = l.index
             outList[i] = ob.data.vertex_colors[layer_name].data[j].color   
-
     elif (layer_type == DataLayer.VERTEX_WEIGHT):
         for v in ob.data.vertices:
             try:
@@ -42,7 +65,6 @@ def get_vertex_data_layer(ob, layer_type, layer_name):
             except:
                 weight = 0
             outList[v.index] = weight
-
     return outList
 
 
@@ -81,6 +103,34 @@ def copy_vertex_color_to_weight(
         if mask & ChannelMask.A: color_out.append(color[3])
         value_out = sum(color_out) / len(color_out)
         ob.vertex_groups[weight_layer_name].add([key], value_out, 'REPLACE')
+
+
+def copy_vertex_weight_to_weight(
+        ob,
+        src_layer_name,
+        dst_layer_name
+        ):
+    if src_layer_name == dst_layer_name:
+        return
+    values = get_vertex_data_layer(ob, DataLayer.VERTEX_WEIGHT, src_layer_name)
+    for k, v in values.items():
+        ob.vertex_groups[dst_layer_name].add([k], v, 'REPLACE')
+
+
+def swap_vertex_weight(
+        ob,
+        src_layer_name,
+        dst_layer_name
+        ):
+    if src_layer_name == dst_layer_name:
+        return
+    values_src = get_vertex_data_layer(ob, DataLayer.VERTEX_WEIGHT, src_layer_name)
+    values_dst = get_vertex_data_layer(ob, DataLayer.VERTEX_WEIGHT, dst_layer_name)
+    for k in values_src.keys():
+        value_src = values_src[k]
+        value_dst = values_dst[k]
+        ob.vertex_groups[src_layer_name].add([k], value_dst, 'REPLACE')
+        ob.vertex_groups[dst_layer_name].add([k], value_src, 'REPLACE')
 
 
 
@@ -260,14 +310,11 @@ class LIWEI_PROP_wcex(bpy.types.PropertyGroup):
 class LIWEI_OT_wcex_auto_level(bpy.types.Operator):
     bl_idname = "liwei.wcex_auto_level"
     bl_label = "Auto Level"
+    bl_options = {'REGISTER', 'UNDO'}
     
     @classmethod
     def poll(cls, context):
-        active_object = context.active_object
-        return bool(active_object and \
-                    active_object.type == 'MESH' and \
-                    active_object.vertex_groups.active and \
-                    active_object.data.vertex_colors.active)
+        return assert_object_with_active_W_or_C(context)
     
     def execute(self, context):
         active_object = context.active_object
@@ -294,17 +341,14 @@ class LIWEI_OT_wcex_auto_level(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class LIWEI_OT_wcex_copy_weight_to_color(bpy.types.Operator):
-    bl_idname = "liwei.wcex_copy_weight_to_color"
-    bl_label = "Copy weight to color"
+class LIWEI_OT_wcex_transfer_weight_to_color(bpy.types.Operator):
+    bl_idname = "liwei.wcex_transfer_weight_to_color"
+    bl_label = "Transfer weight to color"
+    bl_options = {'REGISTER', 'UNDO'}
     
     @classmethod
     def poll(cls, context):
-        active_object = context.active_object
-        return bool(active_object and \
-                    active_object.type == 'MESH' and \
-                    active_object.vertex_groups.active and \
-                    active_object.data.vertex_colors.active)
+        return assert_object_with_active_W_and_C(context)
     
     def execute(self, context):
         active_object = context.active_object
@@ -314,28 +358,26 @@ class LIWEI_OT_wcex_copy_weight_to_color(bpy.types.Operator):
         mask_g = ChannelMask.G if context.scene.liwei_prop_wcex.w2c_channel_g else ChannelMask.NONE
         mask_b = ChannelMask.B if context.scene.liwei_prop_wcex.w2c_channel_b else ChannelMask.NONE
         mask_a = ChannelMask.A if context.scene.liwei_prop_wcex.w2c_channel_a else ChannelMask.NONE
-        clean_other_channel = context.scene.liwei_prop_wcex.w2c_clean_other_channel
+        clean_other_channel = context.scene.liwei_prop_wcex.w2c_clean_other_channel # TODO
         if active_group_layer and active_color_layer:
             copy_vertex_weight_to_color(
                 active_object,
                 active_group_layer,
                 active_color_layer,
-                mask = mask_r | mask_g | mask_b | mask_a)
+                mask = mask_r | mask_g | mask_b | mask_a,
+                clean_other = clean_other_channel)
         return {'FINISHED'}
 
 
 
-class LIWEI_OT_wcex_copy_color_to_weight(bpy.types.Operator):
-    bl_idname = "liwei.wcex_copy_color_to_weight"
-    bl_label = "Copy color to weight"
+class LIWEI_OT_wcex_transfer_color_to_weight(bpy.types.Operator):
+    bl_idname = "liwei.wcex_transfer_color_to_weight"
+    bl_label = "Transfer color to weight"
+    bl_options = {'REGISTER', 'UNDO'}
     
     @classmethod
     def poll(cls, context):
-        active_object = context.active_object
-        return bool(active_object and \
-                    active_object.type == 'MESH' and \
-                    active_object.vertex_groups.active and \
-                    active_object.data.vertex_colors.active)
+        return assert_object_with_active_W_and_C(context)
     
     def execute(self, context):
         active_object = context.active_object
@@ -351,6 +393,44 @@ class LIWEI_OT_wcex_copy_color_to_weight(bpy.types.Operator):
                 active_color_layer,
                 active_group_layer,
                 mask = mask_r | mask_g | mask_b | mask_a)
+        return {'FINISHED'}
+
+
+class LIWEI_OT_wcex_transfer_weight_to_weight(bpy.types.Operator):
+    bl_idname = "liwei.wcex_transfer_weight_to_weight"
+    bl_label = "Transfer Weight"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    @classmethod
+    def poll(cls, context):
+        return assert_object_with_active_W(context)
+    
+    def execute(self, context):
+        active_object = context.active_object
+        src_group_layer = context.scene.liwei_prop_wcex.vertex_group_source
+        dst_color_layer = context.scene.liwei_prop_wcex.vertex_group_target
+        if src_group_layer and dst_color_layer:
+            copy_vertex_weight_to_weight(active_object, src_group_layer, dst_color_layer)
+        return {'FINISHED'}
+
+
+class LIWEI_OT_wcex_swap_weight(bpy.types.Operator):
+    bl_idname = "liwei.wcex_swap_weight"
+    bl_label = "Swap Weight"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    @classmethod
+    def poll(cls, context):
+        return assert_object_with_active_W(context)
+    
+    def execute(self, context):
+        active_object = context.active_object
+        if not active_object:
+            return {'FINISHED'}
+        src_group_layer = context.scene.liwei_prop_wcex.vertex_group_source
+        dst_color_layer = context.scene.liwei_prop_wcex.vertex_group_target
+        if src_group_layer and dst_color_layer:
+            swap_vertex_weight(active_object, src_group_layer, dst_color_layer)
         return {'FINISHED'}
     
 
@@ -381,11 +461,11 @@ class LIWEI_PT_wcex(bpy.types.Panel):
             # ADJ
             if (LIWEI_PROP_wcex.Mode.ADJ == mode):
                 row = layout.row()
-                row.prop(bpy.context.scene.liwei_prop_wcex, "adjust_mode")
+                row.prop(bpy.context.scene.liwei_prop_wcex, "adjust_mode", text = "Mode")
                 adjust_mode = bpy.context.scene.liwei_prop_wcex.adjust_mode
                 if DataLayer.VERTEX_WEIGHT == adjust_mode:
                     row = layout.row()
-                    row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group")
+                    row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group", text = "Target")
                     row = layout.row()
                     row.operator("liwei.wcex_auto_level")
                 elif DataLayer.VERTEX_COLOR == adjust_mode:
@@ -404,9 +484,9 @@ class LIWEI_PT_wcex(bpy.types.Panel):
             # W2C
             elif (LIWEI_PROP_wcex.Mode.W2C == mode):
                 row = layout.row()
-                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group")
+                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group", text = "Weight")
                 row = layout.row()
-                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_color")
+                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_color", text = "Color")
                 row = layout.row()
                 row.prop(bpy.context.scene.liwei_prop_wcex, "w2c_channel_r")
                 row.prop(bpy.context.scene.liwei_prop_wcex, "w2c_channel_g")
@@ -415,32 +495,32 @@ class LIWEI_PT_wcex(bpy.types.Panel):
                 row = layout.row()
                 row.prop(bpy.context.scene.liwei_prop_wcex, "w2c_clean_other_channel")
                 row = layout.row()
-                row.operator("liwei.wcex_copy_weight_to_color")
+                row.operator("liwei.wcex_transfer_weight_to_color")
 
             # C2W
             elif (LIWEI_PROP_wcex.Mode.C2W == mode):
                 row = layout.row()
-                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_color")
+                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_color", text = "Color")
                 row = layout.row()
                 row.prop(bpy.context.scene.liwei_prop_wcex, "c2w_channel_r")
                 row.prop(bpy.context.scene.liwei_prop_wcex, "c2w_channel_g")
                 row.prop(bpy.context.scene.liwei_prop_wcex, "c2w_channel_b")
                 row.prop(bpy.context.scene.liwei_prop_wcex, "c2w_channel_a")
                 row = layout.row()
-                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group")
+                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group", text = "Weight")
                 row = layout.row()
-                row.operator("liwei.wcex_copy_color_to_weight")
+                row.operator("liwei.wcex_transfer_color_to_weight")
 
             # W2W
             elif (LIWEI_PROP_wcex.Mode.W2W == mode):
                 row = layout.row()
-                row.label(text="WIP")
-                """
+                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group_source", text = "Source")
                 row = layout.row()
-                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group_source")
+                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group_target", text = "Target")
                 row = layout.row()
-                row.prop(bpy.context.scene.liwei_prop_wcex, "vertex_group_target")
-                """
+                row.operator("liwei.wcex_transfer_weight_to_weight")
+                row = layout.row()
+                row.operator("liwei.wcex_swap_weight")
 
             # C2C
             elif (LIWEI_PROP_wcex.Mode.C2C == mode):
@@ -477,8 +557,10 @@ def register():
     bpy.utils.register_class(LIWEI_PT_wcex)
     bpy.types.Scene.liwei_prop_wcex = bpy.props.PointerProperty(type=LIWEI_PROP_wcex)
     bpy.utils.register_class(LIWEI_OT_wcex_auto_level)
-    bpy.utils.register_class(LIWEI_OT_wcex_copy_weight_to_color)
-    bpy.utils.register_class(LIWEI_OT_wcex_copy_color_to_weight)
+    bpy.utils.register_class(LIWEI_OT_wcex_transfer_weight_to_color)
+    bpy.utils.register_class(LIWEI_OT_wcex_transfer_color_to_weight)
+    bpy.utils.register_class(LIWEI_OT_wcex_transfer_weight_to_weight)
+    bpy.utils.register_class(LIWEI_OT_wcex_swap_weight)
 
 
 def unregister():
@@ -486,8 +568,10 @@ def unregister():
     bpy.utils.unregister_class(LIWEI_PT_wcex)
     del bpy.types.Scene.liwei_prop_wcex
     bpy.utils.unregister_class(LIWEI_OT_wcex_auto_level)
-    bpy.utils.unregister_class(LIWEI_OT_wcex_copy_weight_to_color)
-    bpy.utils.unregister_class(LIWEI_OT_wcex_copy_color_to_weight)
+    bpy.utils.unregister_class(LIWEI_OT_wcex_transfer_weight_to_color)
+    bpy.utils.unregister_class(LIWEI_OT_wcex_transfer_color_to_weight)
+    bpy.utils.unregister_class(LIWEI_OT_wcex_transfer_weight_to_weight)
+    bpy.utils.unregister_class(LIWEI_OT_wcex_swap_weight)
 
 
 if __name__ == "__main__":
